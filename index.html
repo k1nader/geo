@@ -94,14 +94,15 @@ function found(pos)
 }
 
 /*
- * One geocoder, and the subdistrict comes out of it after all.
+ * The fast geocoder first, and the subdistrict comes out of it after all.
  *
- * The top level fields of this answer stop at the district, which is what
- * sent me looking at a second service that knows roads but can take several
- * seconds - and that wait was the whole of the delay. It was unnecessary:
+ * Its top level fields stop at the district, which is what sent me looking
+ * at a second service that knows roads but can take several seconds - and
+ * that wait was the whole of the delay. It was unnecessary:
  * localityInfo.administrative carries every level it resolved, and the last
  * of them is the subdistrict. So the fast one is asked, and the deepest
- * entry it returns is the answer.
+ * entry it returns is the answer; the slow one is kept only for when that
+ * breakdown is missing entirely.
  *
  * Deepest by order rather than a fixed level, because not everywhere has a
  * subdistrict and the list simply stops wherever it runs out.
@@ -114,7 +115,21 @@ function found(pos)
  */
 function lookup(lat, lon)
 {
-	fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=zh-Hans&latitude=' + lat + '&longitude=' + lon)
+	bdc(lat, lon).then(function (name)
+	{
+		if (name)
+		{
+			confirmName(lat, lon, name);
+			return;
+		}
+		/* it had nothing to say, so the slow one gets its turn after all */
+		osm(lat, lon).then(function (alt) { confirmName(lat, lon, alt); });
+	});
+}
+
+function bdc(lat, lon)
+{
+	return fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=zh-Hans&latitude=' + lat + '&longitude=' + lon)
 		.then(function (r) { return r.json(); })
 		.then(function (j)
 		{
@@ -127,10 +142,26 @@ function lookup(lat, lon)
 					best = list[i];
 				}
 			}
-			confirmName(lat, lon, (best && best.name)
-				|| j.locality || j.city || j.principalSubdivision || '');
+			/* the deepest level it resolved, or the top level fields when it
+			   did not break the place down at all */
+			return (best && best.name) || j.locality || j.city
+				|| j.principalSubdivision || '';
 		})
-		.catch(function () { confirmName(lat, lon, ''); });
+		.catch(function () { return ''; });
+}
+
+/* the fallback, which knows roads but can take several seconds */
+function osm(lat, lon)
+{
+	return fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=zh-CN&zoom=18&lat=' + lat + '&lon=' + lon)
+		.then(function (r) { return r.json(); })
+		.then(function (j)
+		{
+			var a = (j && j.address) || {};
+			return a.road || a.suburb || a.city_district || a.town || a.village
+				|| a.city || a.county || a.state || '';
+		})
+		.catch(function () { return ''; });
 }
 
 function confirmName(lat, lon, name)
