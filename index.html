@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>取定位</title>
+<style>
+body{margin:0;padding:24px;font:16px/1.6 -apple-system,system-ui,sans-serif;background:#14161a;color:#e8e8ea}
+h1{font-size:19px;margin:0 0 4px}
+p{margin:0 0 12px;font-size:15px}
+.hint{color:#9a9aa0;font-size:13px}
+button,a.btn{display:block;width:100%;padding:14px;border:0;border-radius:10px;background:#2f6fd0;color:#fff;font-size:16px;text-align:center;text-decoration:none;box-sizing:border-box}
+a.alt{background:#2a2e35}
+input{width:100%;padding:13px;border:1px solid #33363d;border-radius:10px;background:#1b1e23;color:#fff;font-size:16px;box-sizing:border-box}
+.row{margin-top:12px}
+.bad{color:#e06a6a}
+.ok{color:#64d08a}
+code{color:#9a9aa0;font-size:12px;word-break:break-all}
+</style>
+</head>
+<body>
+<h1>取定位</h1>
+<div id="out"><p>正在准备…</p></div>
+<p class="hint" id="dbg"></p>
+
+<script>
+/*
+ * Why this page exists at all.
+ *
+ * The television serves its own page over plain http on the local network,
+ * and a browser will not hand a position to a page like that - only a secure
+ * context gets geolocation, and a private address over http is not one. This
+ * page is on https, so it is.
+ *
+ * Getting the answer back is the other half. A fetch from here to the
+ * television would be blocked as mixed content, but that rule is about
+ * subresources: a top level navigation from https to http is still allowed.
+ * So the coordinate rides back in the query string of a navigation.
+ *
+ * Every stage says where it got to, because when this fails it fails on
+ * somebody else's phone and the only evidence is what was left on screen.
+ *
+ * The referrer policy is the browser default rather than none: Nominatim
+ * asks to be able to see who is calling it, and that policy still sends
+ * nothing on the way back to the television, because https to http is a
+ * downgrade and a downgrade gets no referrer.
+ */
+var out = document.getElementById('out');
+var dbg = document.getElementById('dbg');
+var cb = decodeURIComponent((location.hash.match(/cb=([^&]*)/) || [])[1] || '');
+
+dbg.innerHTML = '电视地址：<code>' + (cb || '（没读到）') + '</code>';
+
+function show(html) { out.innerHTML = html; }
+
+function fail(stage, text)
+{
+	show('<p class="bad">' + stage + '：' + text + '</p>'
+		+ '<div class="row"><button onclick="start()">重试</button></div>');
+}
+
+function start()
+{
+	if (!cb)
+	{
+		fail('第一步', '没读到电视地址。请从电视上那一页点「用手机定位」进来，不要直接打开本页。');
+		return;
+	}
+	if (!navigator.geolocation)
+	{
+		fail('第二步', '这个浏览器没有定位接口。');
+		return;
+	}
+	show('<p>正在向浏览器请求定位，请允许…</p>');
+	navigator.geolocation.getCurrentPosition(found, function (e)
+	{
+		var why = e && e.code === 1 ? '你拒绝了定位权限'
+			: e && e.code === 2 ? '系统定位不可用，检查手机的定位开关'
+			: e && e.code === 3 ? '定位超时' : '未知原因';
+		fail('第二步', why + '。也可以回电视那一页用「搜索地名」。');
+	}, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+}
+
+function found(pos)
+{
+	var lat = pos.coords.latitude.toFixed(4);
+	var lon = pos.coords.longitude.toFixed(4);
+	show('<p>已定位到 <code>' + lat + ', ' + lon + '</code></p><p class="hint">正在查地名…</p>');
+	osm(lat, lon);
+}
+
+/*
+ * The phone's own position is a real WGS-84 fix, which is the datum these
+ * services read, so it can be taken all the way down to the subdistrict.
+ * That is not true of a coordinate pasted out of a Chinese map app - those
+ * are GCJ-02 and land a few hundred metres away - which is why the page the
+ * television serves stops at the city.
+ */
+function osm(lat, lon)
+{
+	fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=zh-CN&zoom=18&lat=' + lat + '&lon=' + lon)
+		.then(function (r) { return r.json(); })
+		.then(function (j)
+		{
+			var a = (j && j.address) || {};
+			/* the narrowest it knows, widening until something answers */
+			var name = a.road || a.suburb || a.city_district || a.town || a.village
+				|| a.city || a.county || a.state || '';
+			if (!name)
+			{
+				throw new Error('empty');
+			}
+			confirmName(lat, lon, name);
+		})
+		.catch(function () { bdc(lat, lon); });
+}
+
+/* the backstop, narrowest first in the same way */
+function bdc(lat, lon)
+{
+	fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=zh-Hans&latitude=' + lat + '&longitude=' + lon)
+		.then(function (r) { return r.json(); })
+		.then(function (j)
+		{
+			confirmName(lat, lon, j.locality || j.city || j.principalSubdivision || '');
+		})
+		.catch(function () { confirmName(lat, lon, ''); });
+}
+
+function confirmName(lat, lon, name)
+{
+	show('<p>已定位到 <code>' + lat + ', ' + lon + '</code></p>'
+		+ '<input id="nm" placeholder="电视上显示的名字，可留空">'
+		+ '<div class="row"><button id="go">送回电视</button></div>'
+		+ '<div class="row"><a class="btn alt" id="manual" href="#">点不动就点这里</a></div>'
+		+ '<p class="hint row">两个都没反应的话，把下面这串在手机浏览器里打开：</p>'
+		+ '<p><code id="url"></code></p>');
+	document.getElementById('nm').value = name || '';
+
+	function target()
+	{
+		return cb + '?lat=' + lat + '&lon=' + lon
+			+ '&name=' + encodeURIComponent(document.getElementById('nm').value.trim());
+	}
+	function refresh()
+	{
+		document.getElementById('manual').href = target();
+		document.getElementById('url').textContent = target();
+	}
+	document.getElementById('nm').oninput = refresh;
+	refresh();
+
+	document.getElementById('go').onclick = function ()
+	{
+		show('<p class="ok">正在送回电视…</p><p class="hint">没有跳走的话，回到上一页点那个链接。</p>');
+		/* a navigation, not a fetch - see the note at the top. A script
+		   driven one can still be refused where a tap would not be, which is
+		   what the link beside the button is for. */
+		location.href = target();
+	};
+}
+
+start();
+</script>
+</body>
+</html>
