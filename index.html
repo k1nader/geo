@@ -50,7 +50,9 @@ var out = document.getElementById('out');
 var dbg = document.getElementById('dbg');
 var cb = decodeURIComponent((location.hash.match(/cb=([^&]*)/) || [])[1] || '');
 
-dbg.innerHTML = '电视地址：<code>' + (cb || '（没读到）') + '</code>';
+dbg.innerHTML = cb
+	? '电视地址：<code>' + cb + '</code>'
+	: '没有电视地址，这次只看结果，不送回。';
 
 function show(html) { out.innerHTML = html; }
 
@@ -60,13 +62,14 @@ function fail(stage, text)
 		+ '<div class="row"><button onclick="start()">重试</button></div>');
 }
 
+/*
+ * Opened on its own, with no television waiting, it still runs: locating
+ * and naming the spot is most of what there is to get wrong, and being able
+ * to check that from the sofa without a set switched on is worth more than
+ * refusing at the first step.
+ */
 function start()
 {
-	if (!cb)
-	{
-		fail('第一步', '没读到电视地址。请从电视上那一页点「用手机定位」进来，不要直接打开本页。');
-		return;
-	}
 	if (!navigator.geolocation)
 	{
 		fail('第二步', '这个浏览器没有定位接口。');
@@ -130,6 +133,14 @@ function bdc(lat, lon)
 
 function confirmName(lat, lon, name)
 {
+	if (!cb)
+	{
+		show('<p>定位 <code>' + lat + ', ' + lon + '</code></p>'
+			+ '<p class="ok">查到的地名：' + (name || '（没查到）') + '</p>'
+			+ '<p class="hint">要送到电视上，请从电视那一页点「用手机定位」进来。</p>'
+			+ '<div class="row"><button onclick="start()">再测一次</button></div>');
+		return;
+	}
 	show('<p>已定位到 <code>' + lat + ', ' + lon + '</code></p>'
 		+ '<input id="nm" placeholder="电视上显示的名字，可留空">'
 		+ '<div class="row"><button id="go">送回电视</button></div>'
