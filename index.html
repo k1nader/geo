@@ -90,43 +90,45 @@ function found(pos)
 	var lat = pos.coords.latitude.toFixed(4);
 	var lon = pos.coords.longitude.toFixed(4);
 	show('<p>已定位到 <code>' + lat + ', ' + lon + '</code></p><p class="hint">正在查地名…</p>');
-	osm(lat, lon);
+	lookup(lat, lon);
 }
 
 /*
- * The phone's own position is a real WGS-84 fix, which is the datum these
- * services read, so it can be taken all the way down to the subdistrict.
- * That is not true of a coordinate pasted out of a Chinese map app - those
- * are GCJ-02 and land a few hundred metres away - which is why the page the
- * television serves stops at the city.
+ * One geocoder, and the subdistrict comes out of it after all.
+ *
+ * The top level fields of this answer stop at the district, which is what
+ * sent me looking at a second service that knows roads but can take several
+ * seconds - and that wait was the whole of the delay. It was unnecessary:
+ * localityInfo.administrative carries every level it resolved, and the last
+ * of them is the subdistrict. So the fast one is asked, and the deepest
+ * entry it returns is the answer.
+ *
+ * Deepest by order rather than a fixed level, because not everywhere has a
+ * subdistrict and the list simply stops wherever it runs out.
+ *
+ * The phone's own position is a real WGS-84 fix, which is the datum this
+ * service reads, so it can be taken that far down. That is not true of a
+ * coordinate pasted out of a Chinese map app - those are GCJ-02 and land a
+ * few hundred metres away - which is why the page the television serves
+ * stops at the city.
  */
-function osm(lat, lon)
-{
-	fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=zh-CN&zoom=18&lat=' + lat + '&lon=' + lon)
-		.then(function (r) { return r.json(); })
-		.then(function (j)
-		{
-			var a = (j && j.address) || {};
-			/* the narrowest it knows, widening until something answers */
-			var name = a.road || a.suburb || a.city_district || a.town || a.village
-				|| a.city || a.county || a.state || '';
-			if (!name)
-			{
-				throw new Error('empty');
-			}
-			confirmName(lat, lon, name);
-		})
-		.catch(function () { bdc(lat, lon); });
-}
-
-/* the backstop, narrowest first in the same way */
-function bdc(lat, lon)
+function lookup(lat, lon)
 {
 	fetch('https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=zh-Hans&latitude=' + lat + '&longitude=' + lon)
 		.then(function (r) { return r.json(); })
 		.then(function (j)
 		{
-			confirmName(lat, lon, j.locality || j.city || j.principalSubdivision || '');
+			var list = (j.localityInfo && j.localityInfo.administrative) || [];
+			var best = null;
+			for (var i = 0; i < list.length; i++)
+			{
+				if (list[i].name && (best === null || list[i].order > best.order))
+				{
+					best = list[i];
+				}
+			}
+			confirmName(lat, lon, (best && best.name)
+				|| j.locality || j.city || j.principalSubdivision || '');
 		})
 		.catch(function () { confirmName(lat, lon, ''); });
 }
